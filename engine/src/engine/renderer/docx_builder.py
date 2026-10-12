@@ -160,20 +160,22 @@ def _suppress_list_numbering(paragraph) -> None:
     """Turn off the paragraph style's automatic list numbering.
 
     The Golden template's "figure caption" style carries <w:numPr> with a
-    numbered list that Word renders as "Fig. N." before the paragraph text.
-    That is correct for figures, but table captions reuse the same style for
-    its 8pt sizing and spacing — leaving them labelled "Fig. 1. TABLE I ...".
+    numbered list that Word renders as "Fig. N." before the paragraph text,
+    and the heading styles do the same ("I.", "A.", "1)"). The builder writes
+    every label itself from the document model — the engine makes no
+    numbering decisions of its own — so leaving the style numbering on
+    doubled them up ("II. II. RELATED WORK", "Fig. 1. Fig. 1. ...") or put a
+    figure label on a table caption ("Fig. 1. TABLE I ..."). Every paragraph
+    in those styles calls this.
 
     Setting numId to 0 is the OOXML way to say "no numbering" for this
-    paragraph, overriding the style without altering the style itself (so
-    figure captions keep numbering) and without duplicating its formatting.
+    paragraph, overriding the style without altering the style itself and
+    without duplicating its formatting.
+    get_or_add_numPr() inserts <w:numPr> at its schema position in <w:pPr>,
+    so it stays valid even when alignment etc. were set first.
     """
-    p_pr = paragraph._p.get_or_add_pPr()
-    num_pr = OxmlElement("w:numPr")
-    num_id = OxmlElement("w:numId")
-    num_id.set(qn("w:val"), "0")
-    num_pr.append(num_id)
-    p_pr.append(num_pr)
+    num_pr = paragraph._p.get_or_add_pPr().get_or_add_numPr()
+    num_pr.get_or_add_numId().val = 0
 
 
 def _set_table_layout_fixed(table) -> None:
@@ -443,10 +445,14 @@ class DocxBuilder:
 
     def _render_heading(self, block: HeadingBlock) -> None:
         style = {1: S.HEADING_1, 2: S.HEADING_2, 3: S.HEADING_3}[block.level]
+        # IEEE heading labels — "II. TITLE", "A. Title", "1) Title" — matching
+        # the live preview. The model carries the numbering explicitly, so the
+        # template style's own auto-numbering is switched off below.
         label = ""
         if block.numbering:
-            label = f"{block.numbering}. " if block.level == 1 else f"{block.numbering} "
+            label = f"{block.numbering}) " if block.level == 3 else f"{block.numbering}. "
         p = self.doc.add_paragraph(style=style)
+        _suppress_list_numbering(p)
         if block.level == 1:
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = p.add_run(f"{label}{block.text.upper()}")
@@ -472,6 +478,7 @@ class DocxBuilder:
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
         cap = self.doc.add_paragraph(style=S.FIGURE_CAPTION)
+        _suppress_list_numbering(cap)   # the label is written explicitly below
         cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
         cap.add_run(f"Fig. {_anchor_number(block.anchor)}. ").bold = True
         cap.add_run(block.caption)
@@ -494,6 +501,7 @@ class DocxBuilder:
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
         cap = self.doc.add_paragraph(style=S.FIGURE_CAPTION)
+        _suppress_list_numbering(cap)   # the label is written explicitly below
         cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
         cap.add_run(f"Fig. {_anchor_number(block.anchor)}. ").bold = True
         cap.add_run(block.caption)
@@ -620,6 +628,7 @@ class DocxBuilder:
     def _render_references(self, refs: list[Reference]) -> None:
         # Section heading
         p = self.doc.add_paragraph(style=S.HEADING_1)
+        _suppress_list_numbering(p)   # IEEE leaves REFERENCES unnumbered
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p.add_run("REFERENCES")
 

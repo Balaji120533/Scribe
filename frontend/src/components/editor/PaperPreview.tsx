@@ -109,6 +109,11 @@ const FS = {
 // ~42% taller than the document, which shifted every page break.
 const BODY_LINE_HEIGHT = 11.4 / 10;
 
+// Pixel equivalents used by the paginator when it splits a paragraph across
+// columns: one body line, and the 6pt space-after a paragraph ends with.
+const BODY_LINE_PX = 10 * PT_TO_PX * BODY_LINE_HEIGHT;
+const PARAGRAPH_GAP_PX = 6 * PT_TO_PX;
+
 const HEADING_CLS: Record<1 | 2 | 3, string> = {
   1: 'font-bold uppercase tracking-wider text-center mt-4 mb-1',
   2: 'font-semibold italic mt-3 mb-0.5',
@@ -128,7 +133,9 @@ function headingText(b: Extract<PreviewBlock, { kind: 'heading' }>): string {
   return `${b.numbering}) ${b.text}`;
 }
 
-function Block({ block, refCount }: { block: PreviewBlock; refCount: number }) {
+/** `continues` marks a paragraph fragment that carries on in the next column:
+ *  no space-after, and its last line is justified like any interior line. */
+function Block({ block, refCount, continues = false }: { block: PreviewBlock; refCount: number; continues?: boolean }) {
   switch (block.kind) {
     case 'heading':
       return <div className={`${HEADING_CLS[block.level]} break-inside-avoid`} style={{ fontSize: FS.heading }}>{headingText(block)}</div>;
@@ -137,7 +144,12 @@ function Block({ block, refCount }: { block: PreviewBlock; refCount: number }) {
       return (
         <p
           className="text-justify text-gray-700"
-          style={{ fontSize: FS.body, lineHeight: BODY_LINE_HEIGHT, marginBottom: pt(6) }}
+          style={{
+            fontSize: FS.body,
+            lineHeight: BODY_LINE_HEIGHT,
+            marginBottom: continues ? 0 : pt(6),
+            textAlignLast: continues ? 'justify' : undefined,
+          }}
         >
           {resolveCitations(block.text, refCount)}
         </p>
@@ -242,11 +254,22 @@ function Block({ block, refCount }: { block: PreviewBlock; refCount: number }) {
 }
 
 // One flowable item in the column-fill stream. 'abstract' is always item 0
-// when present; references are appended as the final item.
+// when present; references are appended as the final item. A paragraph too
+// long for the space left in a column is split into several 'block' items,
+// all but the last flagged `continues`.
 type FlowItem =
   | { kind: 'abstract'; abstract: string; keywords: string[] }
-  | { kind: 'block'; block: PreviewBlock; index: number }
+  | { kind: 'block'; block: PreviewBlock; index: number; continues?: boolean }
   | { kind: 'references'; refs: DocPreview['references'] };
+
+/** Wraps each flow item as a block formatting context. Without it, a child's
+ *  top/bottom margins collapse through the wrapper, so the measured height
+ *  leaves them out while the rendered column still includes them — every
+ *  paragraph was under-measured by its space-after and the column bottom
+ *  got clipped. Used identically in the measurement pass and the columns. */
+function FlowSlot({ children }: { children: React.ReactNode }) {
+  return <div style={{ display: 'flow-root' }}>{children}</div>;
+}
 
 function FlowItemView({ item, refCount }: { item: FlowItem; refCount: number }) {
   switch (item.kind) {
@@ -268,7 +291,7 @@ function FlowItemView({ item, refCount }: { item: FlowItem; refCount: number }) 
         </div>
       );
     case 'block':
-      return <Block block={item.block} refCount={refCount} />;
+      return <Block block={item.block} refCount={refCount} continues={item.continues} />;
     case 'references':
       return (
         <div className="break-inside-avoid mt-3">
@@ -294,6 +317,8 @@ type PageColumns = { left: FlowItem[]; right: FlowItem[] };
 
 export default function PaperPreview({ preview, zoom = 1 }: Props) {
   const measureRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const scratchRef = useRef<HTMLParagraphElement>(null);
   const [pages, setPages] = useState<PageColumns[] | null>(null);
 
   // Wide figures/tables span both columns; render them outside the column flow.
@@ -320,12 +345,33 @@ export default function PaperPreview({ preview, zoom = 1 }: Props) {
   // render an implicit extra column that bleeds past the page edge when
   // content doesn't divide evenly into exactly two columns).
   const recomputePages = () => {
-    const container = measureRef.current;
-    if (!container) return;
+    const list = listRef.current;
+    const scratch = scratchRef.current;
+    if (!list || !scratch) return;
 
-    const heights = Array.from(container.children).map(
+    const heights = Array.from(list.children).map(
       child => (child as HTMLElement).getBoundingClientRect().height,
     );
+
+    // Height of a margin-less body paragraph holding `text`, at column width.
+    const measureText = (text: string) => {
+      scratch.textContent = text;
+      return scratch.getBoundingClientRect().height;
+    };
+
+    // Largest k such that the first k words still fit in `space` pixels.
+    // Height only grows with k, so a binary search finds the last word of
+    // the last whole line that fits.
+    const fitWords = (words: string[], space: number) => {
+      let lo = 0;
+      let hi = words.length;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (measureText(words.slice(0, mid).join(' ')) <= space + 0.5) lo = mid;
+        else hi = mid - 1;
+      }
+      return lo;
+    };
 
     const bucketed: PageColumns[] = [];
     let left: FlowItem[] = [];
@@ -340,20 +386,83 @@ export default function PaperPreview({ preview, zoom = 1 }: Props) {
       col = 'left';
       colHeight = 0;
     };
+    const current = () => (col === 'left' ? left : right);
+    const nextColumn = () => {
+      if (col === 'left') {
+        col = 'right';
+        colHeight = 0;
+      } else {
+        pushPage();
+      }
+    };
+    const place = (item: FlowItem, h: number) => {
+      current().push(item);
+      colHeight += h;
+    };
+
+    const refCount = preview.references.length;
 
     flowItems.forEach((item, i) => {
       const h = heights[i] ?? 0;
-      const hasContent = col === 'left' ? left.length > 0 : right.length > 0;
-      if (hasContent && colHeight + h > COLUMN_FILL_BUDGET) {
-        if (col === 'left') {
-          col = 'right';
-          colHeight = 0;
-        } else {
-          pushPage();
+
+      // Paragraphs flow line by line: whatever fits fills the bottom of this
+      // column and the rest continues at the top of the next one, like a
+      // real two-column page — rather than the whole paragraph jumping
+      // across and leaving a gap.
+      if (item.kind === 'block' && item.block.kind === 'paragraph') {
+        // Resolve citations first so a split can never land inside "[CITE 1]".
+        let words = resolveCitations(item.block.text, refCount).split(/\s+/).filter(Boolean);
+        let height = h;
+        let fragmented = false;
+
+        for (;;) {
+          const space = COLUMN_FILL_BUDGET - colHeight;
+          const rest = { kind: 'block', index: item.index, block: { kind: 'paragraph', text: words.join(' ') } } as FlowItem;
+
+          if (height <= space + 0.5) {
+            place(fragmented ? rest : item, height);
+            break;
+          }
+
+          const k = fitWords(words, space);
+          if (k >= words.length) {
+            // The text fits; only its trailing space-after doesn't. That
+            // space is invisible at the bottom of a column, so keep it here.
+            place(fragmented ? rest : item, space);
+            break;
+          }
+          if (k === 0) {
+            // Not even one line fits. An empty column can always take at
+            // least one line, so this only happens with content above it.
+            if (current().length === 0) {
+              place(fragmented ? rest : item, height);
+              break;
+            }
+            nextColumn();
+            continue;
+          }
+
+          const head = words.slice(0, k).join(' ');
+          place(
+            { kind: 'block', index: item.index, continues: true, block: { kind: 'paragraph', text: head } },
+            measureText(head),
+          );
+          nextColumn();
+          words = words.slice(k);
+          height = measureText(words.join(' ')) + PARAGRAPH_GAP_PX;
+          fragmented = true;
         }
+        return;
       }
-      (col === 'left' ? left : right).push(item);
-      colHeight += h;
+
+      // Everything else is placed whole. A heading also needs room for one
+      // line of what follows, so it is never stranded alone at the bottom
+      // of a column with its text starting in the next.
+      const next = flowItems[i + 1];
+      const keepWithNext = item.kind === 'block' && item.block.kind === 'heading' && next !== undefined;
+      const needed = keepWithNext ? h + BODY_LINE_PX : h;
+      if (current().length > 0 && colHeight + needed > COLUMN_FILL_BUDGET + 0.5) nextColumn();
+      place(item, h);
     });
     if (left.length > 0 || right.length > 0) pushPage();
     if (bucketed.length === 0) bucketed.push({ left: [], right: [] });
@@ -450,11 +559,20 @@ export default function PaperPreview({ preview, zoom = 1 }: Props) {
           wordBreak: 'break-word',
         }}
       >
-        {flowItems.map((item, i) => (
-          <div key={i}>
-            <FlowItemView item={item} refCount={preview.references.length} />
-          </div>
-        ))}
+        <div ref={listRef}>
+          {flowItems.map((item, i) => (
+            <FlowSlot key={i}>
+              <FlowItemView item={item} refCount={preview.references.length} />
+            </FlowSlot>
+          ))}
+        </div>
+        {/* Scratch paragraph for measuring candidate split points. Styled like
+            a body paragraph minus its space-after; its text is set imperatively. */}
+        <p
+          ref={scratchRef}
+          className="text-justify"
+          style={{ fontSize: FS.body, lineHeight: BODY_LINE_HEIGHT, margin: 0 }}
+        />
       </div>
 
       {displayPages.map((cols, pageIndex) => (
@@ -561,18 +679,26 @@ export default function PaperPreview({ preview, zoom = 1 }: Props) {
                 wordBreak: 'break-word',
               }}
             >
-              {cols.left.map((item, i) => <FlowItemView key={i} item={item} refCount={preview.references.length} />)}
+              {cols.left.map((item, i) => (
+                <FlowSlot key={i}><FlowItemView item={item} refCount={preview.references.length} /></FlowSlot>
+              ))}
             </div>
             <div
               style={{
                 width: COLUMN_WIDTH,
                 flexShrink: 0,
                 overflow: 'hidden',
+                // Same text width as the left column (and the measurement
+                // pass), so a paragraph split across the two columns wraps at
+                // exactly the measured line breaks on both sides.
+                paddingRight: COLUMN_GAP / 2 + COLUMN_INNER_BORDER,
                 overflowWrap: 'break-word',
                 wordBreak: 'break-word',
               }}
             >
-              {cols.right.map((item, i) => <FlowItemView key={i} item={item} refCount={preview.references.length} />)}
+              {cols.right.map((item, i) => (
+                <FlowSlot key={i}><FlowItemView item={item} refCount={preview.references.length} /></FlowSlot>
+              ))}
             </div>
           </div>
 
