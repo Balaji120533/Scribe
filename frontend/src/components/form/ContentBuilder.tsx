@@ -17,6 +17,7 @@ import { api } from '@/lib/api';
 import type { ImageWarning } from '@/lib/api';
 import { uid } from '@/types/paper-form';
 import { findCitationHints } from '@/lib/citationHints';
+import { subsectionNumbers, subsectionLabel } from '@/lib/numbering';
 import EquationEditor from '@/components/form/EquationEditor';
 
 type UploadResult = { ref: string; filename: string; warning?: ImageWarning | null };
@@ -54,7 +55,11 @@ function GripHandle({ attributes, listeners }: { attributes: DraggableAttributes
       {...attributes}
       {...listeners}
       title="Drag to reorder"
-      className="flex-shrink-0 text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing touch-none px-0.5"
+      aria-label="Drag to reorder"
+      // Kept on the left, away from the ✕ on the right, so grabbing a block
+      // never lands on its delete button. Mid-gray with a hover chip so it
+      // reads as a control, not as faint decoration.
+      className="flex-shrink-0 rounded p-0.5 text-gray-400 hover:text-gray-700 hover:bg-gray-200/70 transition-colors cursor-grab active:cursor-grabbing touch-none"
     >
       <svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor">
         <circle cx="3" cy="2" r="1.3" /><circle cx="9" cy="2" r="1.3" />
@@ -218,6 +223,8 @@ function SortableSection({
     onReorderContent(String(active.id), String(over.id));
   };
 
+  const subNumbers = subsectionNumbers(sec.content);
+
   return (
     <div
       ref={setNodeRef}
@@ -253,6 +260,7 @@ function SortableSection({
               <SortableItem
                 key={item.id}
                 item={item}
+                subNumber={subNumbers.get(item.id)}
                 canRemove={sec.content.length > 1}
                 onPatch={patch => onPatchContent(item.id, patch)}
                 onRemove={() => onRemoveContent(item.id)}
@@ -285,6 +293,8 @@ function SortableSection({
 
 interface SortableItemProps {
   item: ContentItem;
+  /** This sub-section's letter/number within its section (sub-sections only). */
+  subNumber?: string;
   canRemove: boolean;
   onPatch: (patch: Record<string, unknown>) => void;
   onRemove: () => void;
@@ -292,7 +302,7 @@ interface SortableItemProps {
   refCount: number;
 }
 
-function SortableItem({ item, canRemove, onPatch, onRemove, onUploadImage, refCount }: SortableItemProps) {
+function SortableItem({ item, subNumber, canRemove, onPatch, onRemove, onUploadImage, refCount }: SortableItemProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
 
   return (
@@ -307,6 +317,7 @@ function SortableItem({ item, canRemove, onPatch, onRemove, onUploadImage, refCo
       <div className="flex-1 min-w-0">
         <ItemEditor
           item={item}
+          subNumber={subNumber}
           canRemove={canRemove}
           onPatch={onPatch}
           onRemove={onRemove}
@@ -368,6 +379,7 @@ function CitationHints({
 
 interface ItemEditorProps {
   item: ContentItem;
+  subNumber?: string;
   canRemove: boolean;
   onPatch: (patch: Record<string, unknown>) => void;
   onRemove: () => void;
@@ -375,7 +387,7 @@ interface ItemEditorProps {
   refCount: number;
 }
 
-function ItemEditor({ item, canRemove, onPatch, onRemove, onUploadImage, refCount }: ItemEditorProps) {
+function ItemEditor({ item, subNumber, canRemove, onPatch, onRemove, onUploadImage, refCount }: ItemEditorProps) {
   const removeBtn = canRemove ? (
     <button
       type="button"
@@ -409,13 +421,18 @@ function ItemEditor({ item, canRemove, onPatch, onRemove, onUploadImage, refCoun
     case 'subsection':
       return (
         <div className="flex items-center gap-2 pl-3 border-l-2 border-gray-200">
+          {/* This sub-section's own label — "A.", "B.", "1)", "2)" — the same
+              one the preview and the compiled paper print (lib/numbering). */}
+          <span className="text-[11px] font-bold text-gray-500 w-5 flex-shrink-0 tabular-nums">
+            {subNumber ? subsectionLabel(item.level, subNumber) : ''}
+          </span>
           <select
             className="text-[11px] border border-gray-200 rounded px-1 py-1 text-gray-600 bg-white"
             value={item.level}
             onChange={e => onPatch({ level: Number(e.target.value) })}
           >
-            <option value={2}>A. Sub-section</option>
-            <option value={3}>1) Sub-sub</option>
+            <option value={2}>Sub-section</option>
+            <option value={3}>Sub-sub-section</option>
           </select>
           <input
             className={`${SM_INPUT} flex-1`}

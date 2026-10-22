@@ -1,5 +1,6 @@
 import type { PaperForm } from '@/types/paper-form';
 import type { DocumentModel, Block } from '@/types/document-model';
+import { subsectionNumbers } from '@/lib/numbering';
 
 const ROMAN = ['I','II','III','IV','V','VI','VII','VIII','IX','X',
                'XI','XII','XIII','XIV','XV','XVI','XVII','XVIII'];
@@ -23,13 +24,10 @@ export function formToModel(form: PaperForm): DocumentModel {
   let figCounter   = 0;
   let tableCounter = 0;
   let eqCounter    = 0;
-  let subH2Counter = 0;
-  let subH3Counter = 0;
 
   for (let si = 0; si < form.sections.length; si++) {
     const sec = form.sections[si];
-    subH2Counter = 0;
-    subH3Counter = 0;
+    const subNumbers = subsectionNumbers(sec.content);
 
     // Level-1 heading
     if (sec.heading.trim()) {
@@ -54,15 +52,12 @@ export function formToModel(form: PaperForm): DocumentModel {
 
         case 'subsection':
           if (item.text.trim()) {
-            if (item.level === 2) {
-              subH2Counter++;
-              subH3Counter = 0;
-              const letter = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[subH2Counter - 1] ?? String(subH2Counter);
-              blocks.push({ type: 'heading', level: 2, text: item.text.trim(), numbering: letter });
-            } else {
-              subH3Counter++;
-              blocks.push({ type: 'heading', level: 3, text: item.text.trim(), numbering: String(subH3Counter) });
-            }
+            blocks.push({
+              type: 'heading',
+              level: item.level,
+              text: item.text.trim(),
+              numbering: subNumbers.get(item.id),
+            });
           }
           break;
 

@@ -164,9 +164,10 @@ def _suppress_list_numbering(paragraph) -> None:
     and the heading styles do the same ("I.", "A.", "1)"). The builder writes
     every label itself from the document model — the engine makes no
     numbering decisions of its own — so leaving the style numbering on
-    doubled them up ("II. II. RELATED WORK", "Fig. 1. Fig. 1. ...") or put a
-    figure label on a table caption ("Fig. 1. TABLE I ..."). Every paragraph
-    in those styles calls this.
+    doubled them up ("II. II. RELATED WORK", "Fig. 1. Fig. 1. ...",
+    "[1] [1] M. Chen ...") or put a figure label on a table caption
+    ("Fig. 1. TABLE I ..."). Every paragraph in those styles — headings,
+    captions, references — calls this.
 
     Setting numId to 0 is the OOXML way to say "no numbering" for this
     paragraph, overriding the style without altering the style itself and
@@ -615,12 +616,19 @@ class DocxBuilder:
         p.add_run(f"({eq_num})")
 
     def _render_list(self, block: ListBlock) -> None:
-        for item in block.items:
+        for n, item in enumerate(block.items, start=1):
             if block.style == "bullet":
                 p = self.doc.add_paragraph(style=S.BULLET_LIST)
             else:
+                # The bullet style numbers itself, but there is no numbered-list
+                # style in the template, so the "1." label is written here.
+                # Hanging indent: the label sits in the indent and the tab after
+                # it jumps to the text edge, so wrapped lines align with the
+                # first line's text rather than under the number.
                 p = self.doc.add_paragraph(style=S.BODY_TEXT)
                 p.paragraph_format.left_indent = Pt(18)
+                p.paragraph_format.first_line_indent = Pt(-12)
+                p.add_run(f"{n}.\t")
             self._add_text_with_citations(p, item)
 
     # ── References ────────────────────────────────────────────────────────────
@@ -634,6 +642,7 @@ class DocxBuilder:
 
         for ref in refs:
             p = self.doc.add_paragraph(style=S.REFERENCES)
+            _suppress_list_numbering(p)   # the [key] is written explicitly below
             p.paragraph_format.left_indent = Pt(14)
             p.paragraph_format.first_line_indent = Pt(-14)  # hanging indent
             authors_str = ", ".join(ref.authors)

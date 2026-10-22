@@ -6,6 +6,7 @@ import { useFormProject } from '@/hooks/useFormProject';
 import { useCompileJob } from '@/hooks/useCompileJob';
 import { useToasts } from '@/hooks/useToasts';
 import { formToModel, stripPlaceholders } from '@/lib/formToModel';
+import { subsectionNumbers } from '@/lib/numbering';
 import FormEditor from '@/components/form/FormEditor';
 import PreviewPane from './PreviewPane';
 import ToastStack from './ToastStack';
@@ -15,7 +16,6 @@ import type { DocPreview, PreviewBlock, PreviewSection } from '@/lib/parsePrevie
 import type { PaperForm } from '@/types/paper-form';
 
 const ROMAN = ['I','II','III','IV','V','VI','VII','VIII','IX','X'];
-const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 // IEEE table captions use Roman numerals ("TABLE I", not "TABLE 1"), matching
 // the engine's docx output (docx_builder.py's _anchor_roman) — kept as a
@@ -49,8 +49,7 @@ function formToPreview(form: PaperForm): DocPreview {
 
   safeSections.forEach((s, i) => {
     const roman = ROMAN[i] ?? String(i + 1);
-    let subLetter = 0;
-    let subNum = 0;
+    const subNumbers = subsectionNumbers(s.content ?? []);
 
     if (s.heading?.trim()) {
       blocks.push({ kind: 'heading', level: 1, text: s.heading.trim(), numbering: roman });
@@ -68,10 +67,7 @@ function formToPreview(form: PaperForm): DocPreview {
           break;
         case 'subsection':
           if (item.text?.trim()) {
-            const numbering = item.level === 2
-              ? (LETTERS[subLetter++] ?? '')
-              : String(++subNum);
-            if (item.level === 2) subNum = 0;
+            const numbering = subNumbers.get(item.id);
             blocks.push({ kind: 'heading', level: item.level, text: item.text.trim(), numbering });
             sections.push({ level: item.level, text: item.text });
           }

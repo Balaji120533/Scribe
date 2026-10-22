@@ -275,17 +275,19 @@ function FlowItemView({ item, refCount }: { item: FlowItem; refCount: number }) 
   switch (item.kind) {
     case 'abstract':
       return (
+        // Mirrors the template's styles: "Abstract" is 9pt bold, and
+        // "Keywords" (based on it) adds italic — so the abstract body is bold
+        // and the index terms are bold italic, with the labels bold italic.
         <div className="mb-1">
           {item.abstract && (
-            <div className="text-justify" style={{ fontSize: FS.abstract, lineHeight: BODY_LINE_HEIGHT }}>
-              <em className="font-bold italic">Abstract—</em>
+            <div className="text-justify font-bold" style={{ fontSize: FS.abstract, lineHeight: BODY_LINE_HEIGHT }}>
+              <em className="italic">Abstract—</em>
               {item.abstract}
             </div>
           )}
           {item.keywords.length > 0 && (
-            <div className="mt-1" style={{ fontSize: FS.abstract }}>
-              <span className="font-bold italic">Index Terms—</span>
-              {item.keywords.join(', ')}
+            <div className="mt-1 text-justify font-bold italic" style={{ fontSize: FS.abstract, lineHeight: BODY_LINE_HEIGHT }}>
+              Index Terms—{item.keywords.join(', ')}
             </div>
           )}
         </div>
